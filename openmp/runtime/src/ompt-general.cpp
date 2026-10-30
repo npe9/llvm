@@ -470,6 +470,20 @@ void ompt_pre_init() {
 
 extern "C" int omp_get_initial_device(void);
 
+/* Initial device number for the tool's initialize (2026-10-29, lithe-docker). Ask only our own
+ * offload runtime (libomptarget). omp_get_initial_device() falls back to
+ * dlsym(RTLD_NEXT, "omp_get_num_devices"), and in a PyTorch process that is the wheel's bundled
+ * libgomp: its offload init (nvptx plugin -> cuInit) forks while this thread holds
+ * __kmp_initz_lock (we are inside __kmp_middle_initialize), and __kmp_atfork_prepare then waits
+ * on that lock forever. Every profiled OpenMP-V AI run hung at `import torch` under hpcrun
+ * (any OMPT tool). Without a tool this path never runs. */
+static int ompt_initial_device_for_tool(void) {
+  int (*fptr)();
+  if ((*(void **)(&fptr) = KMP_DLSYM("__tgt_get_num_devices")))
+    return (*fptr)();
+  return 0;
+}
+
 void ompt_post_init() {
   //--------------------------------------------------
   // Execute the post-initialization logic only once.
@@ -486,7 +500,7 @@ void ompt_post_init() {
   //--------------------------------------------------
   if (ompt_start_tool_result) {
     ompt_enabled.enabled = !!ompt_start_tool_result->initialize(
-        ompt_fn_lookup, omp_get_initial_device(),
+        ompt_fn_lookup, ompt_initial_device_for_tool(),
         &(ompt_start_tool_result->tool_data));
 
     if (!ompt_enabled.enabled) {
